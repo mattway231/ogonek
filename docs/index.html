@@ -1,124 +1,132 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Огонёк</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    :root {
-      --glass-color: rgba(255, 255, 255, 0.2);
-      --text-color: #fff;
-      --blur: 20px;
+    @font-face {
+      font-family: 'BenzinBold';
+      src: url('/fonts/Benzin-Bold.woff2') format('woff2');
+    }
+    @font-face {
+      font-family: 'BenzinMedium';
+      src: url('/fonts/Benzin-Medium.woff2') format('woff2');
     }
 
-    html, body {
+    body {
       margin: 0;
       padding: 0;
-      font-family: "Segoe UI", sans-serif;
-      background: url("{{ background }}") center/cover no-repeat fixed;
-      height: 100vh;
-      color: var(--text-color);
+      font-family: 'BenzinMedium', sans-serif;
+      background: url('{{ background }}') no-repeat center center fixed;
+      background-size: cover;
+      backdrop-filter: blur(15px);
       display: flex;
-      justify-content: center;
       align-items: center;
+      justify-content: center;
+      height: 100vh;
     }
 
-    .container {
+    .glass {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 24px;
+      padding: 2rem;
       width: 90%;
-      max-width: 400px;
-      padding: 20px;
-      border-radius: 20px;
-      backdrop-filter: blur(var(--blur));
-      background: var(--glass-color);
-      box-shadow: 0 0 20px rgba(0,0,0,0.3);
+      max-width: 480px;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: white;
       text-align: center;
     }
 
     .emoji {
-      font-size: 64px;
-      margin-bottom: 10px;
+      font-size: 3.5rem;
+      animation: pulse 2.5s infinite;
+    }
+
+    .emoji.gray {
+      filter: grayscale(100%);
+      animation: none;
+    }
+
+    .emoji.dead {
+      animation: none;
     }
 
     .name {
-      font-size: 28px;
-      font-weight: bold;
-      margin-bottom: 5px;
+      font-size: 1.8rem;
+      margin-top: 0.2rem;
+      font-family: 'BenzinBold';
+    }
+
+    .status {
+      font-size: 1rem;
+      color: #ddd;
     }
 
     .streak {
-      font-size: 18px;
-      margin-bottom: 10px;
+      margin-top: 0.5rem;
+      font-size: 1.2rem;
     }
 
     .tasks {
-      margin-top: 20px;
+      margin-top: 1.5rem;
       text-align: left;
     }
 
     .task {
-      background: rgba(255,255,255,0.1);
-      padding: 10px;
-      border-radius: 12px;
-      margin-bottom: 10px;
-      backdrop-filter: blur(10px);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+      margin-bottom: 0.75rem;
+      font-size: 1.05rem;
     }
 
-    .progress {
-      font-weight: bold;
-    }
-
-    @media (max-width: 480px) {
-      .container {
-        padding: 15px;
-      }
-
-      .emoji {
-        font-size: 48px;
-      }
-
-      .name {
-        font-size: 22px;
-      }
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.1); opacity: 0.9; }
+      100% { transform: scale(1); opacity: 1; }
     }
   </style>
 </head>
 <body>
-  <div class="container" id="app">
-    <div class="emoji" id="status">🔥</div>
-    <div class="name" id="name">Огонёк</div>
-    <div class="streak" id="streak">Серия: 0 (–)</div>
+  <div class="glass">
+    {% if p0 + p1 == 6 %}
+      <div class="emoji">🔥</div>
+    {% elif p0 + p1 < 6 and (p0 > 0 or p1 > 0) %}
+      <div class="emoji gray">🔥</div>
+    {% else %}
+      <div class="emoji dead">😭</div>
+    {% endif %}
 
-    <div class="tasks" id="tasks">
-      <!-- задания подгружаются динамически -->
+    <div class="name">{{ name }}</div>
+    <div class="status">
+      {% if p0 + p1 == 6 %}
+        горит
+      {% elif p0 + p1 < 6 and (p0 > 0 or p1 > 0) %}
+        заморожен
+      {% else %}
+        потух
+      {% endif %}
+    </div>
+
+    <div class="streak">{{ streak }}🔥 с {{ date }}</div>
+
+    <div class="tasks">
+      {% for task in tasks %}
+        <div class="task">
+          {% set count = 0 %}
+          {% if task in progress['0'] %}{% set count = count + 1 %}{% endif %}
+          {% if task in progress['1'] %}{% set count = count + 1 %}{% endif %}
+          {% if count == 2 %}
+            ☑️ {{ task }} — 2/2
+          {% elif count == 1 %}
+            ⬜ {{ task }} — 1/2
+          {% else %}
+            ⬜ {{ task }} — 0/2
+          {% endif %}
+        </div>
+      {% endfor %}
     </div>
   </div>
-
-  <script>
-    async function loadState() {
-      const res = await fetch('/api/state');
-      const data = await res.json();
-
-      document.getElementById("name").textContent = data.name;
-      document.getElementById("status").textContent = data.status;
-      document.getElementById("streak").textContent = `Серия: ${data.streak} (с ${data.started_at})`;
-
-      const tasks = document.getElementById("tasks");
-      tasks.innerHTML = "";
-
-      data.tasks.forEach((t, i) => {
-        const div = document.createElement("div");
-        div.className = "task";
-        const done = t.done;
-        div.innerHTML = `<span>${i+1}. ${t.desc}</span><span class="progress">${done}/2</span>`;
-        tasks.appendChild(div);
-      });
-    }
-
-    loadState();
-    setInterval(loadState, 5000);
-  </script>
 </body>
 </html>
