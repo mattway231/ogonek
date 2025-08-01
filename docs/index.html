@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Огонёк</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background: linear-gradient(to bottom, #0a0a0a, #1a1a1a);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      color: white;
+      overflow-x: hidden;
+    }
+
+    .container {
+      max-width: 400px;
+      width: 100%;
+      padding: 1.5em;
+      backdrop-filter: blur(20px);
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 20px;
+      box-shadow: 0 0 30px rgba(255, 255, 255, 0.05);
+      text-align: center;
+      animation: fadeIn 1s ease-in;
+    }
+
+    .emoji {
+      font-size: 4rem;
+      filter: drop-shadow(0 0 8px white);
+      animation: firePulse 2s infinite;
+    }
+
+    .emoji.frozen {
+      filter: grayscale(100%);
+      animation: none;
+    }
+
+    .emoji.dead {
+      font-size: 3rem;
+      animation: none;
+      filter: none;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      margin: 0.5em 0 0.2em;
+    }
+
+    .status {
+      font-size: 1.1rem;
+      color: #aaa;
+      margin-bottom: 1em;
+    }
+
+    .task {
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 0.8em 1em;
+      margin: 0.5em 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .progress {
+      font-weight: bold;
+    }
+
+    @keyframes firePulse {
+      0%, 100% { filter: drop-shadow(0 0 5px orange); }
+      50% { filter: drop-shadow(0 0 15px red); }
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="emoji" class="emoji">🔥</div>
+    <h1><span id="name">Огонёк</span> <span class="status" id="status">🔥</span></h1>
+    <div id="series">Серия: 0</div>
+    <div id="date">Дата начала: —</div>
+    <div id="tasks"></div>
+  </div>
+
+  <script>
+    async function loadState() {
+      const res = await fetch('/api/state');
+      const data = await res.json();
+
+      document.getElementById("name").textContent = data.name;
+      document.getElementById("status").textContent = data.status;
+      document.getElementById("series").textContent = `Серия: ${data.series}`;
+      document.getElementById("date").textContent = data.start_date ? `Дата начала: ${data.start_date}` : "Дата начала: —";
+
+      const emoji = document.getElementById("emoji");
+      if (data.status === "😭") {
+        emoji.textContent = "😭";
+        emoji.className = "emoji dead";
+      } else if (data.status === "🧊") {
+        emoji.className = "emoji frozen";
+        emoji.textContent = "🔥";
+      } else {
+        emoji.className = "emoji";
+        emoji.textContent = data.status;
+      }
+
+      const taskContainer = document.getElementById("tasks");
+      taskContainer.innerHTML = "";
+      for (let t of data.tasks) {
+        const div = document.createElement("div");
+        div.className = "task";
+        div.innerHTML = `<div>${t.name}</div><div class="progress">${t.count}/2</div>`;
+        taskContainer.appendChild(div);
+      }
+    }
+
+    loadState();
+    setInterval(loadState, 10000); // обновлять каждые 10 секунд
+  </script>
+</body>
+</html>
