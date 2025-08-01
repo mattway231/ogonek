@@ -1,221 +1,207 @@
 import asyncio
-import logging
-import random
+import os
 from datetime import datetime, timedelta
+import random
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart
+from aiogram.types import Message
+
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.enums import ParseMode
-from aiogram.types import Message
-from aiogram.fsm.storage.memory import MemoryStorage
-import uvicorn
-import os
 
+import firebase_admin
+from firebase_admin import credentials, db
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ENV variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 MATTHEW = int(os.getenv("MATTHEW"))
 YANA = int(os.getenv("YANA"))
 BACKGROUND = os.getenv("BACKGROUND")
 
-bot = Bot(BOT_TOKEN, parse_mode=ParseMode.HTML)
-dp = Dispatcher(storage=MemoryStorage())
+firebase_admin.initialize_app(
+    credentials.Certificate({
+        "type": "service_account",
+        "project_id": os.getenv("FIREBASE_PROJECT_ID"),
+        "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
+        "private_key": os.getenv("FIREBASE_PRIVATE_KEY").replace("\\n", "\\n"),
+        "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
+        "client_id": os.getenv("FIREBASE_CLIENT_ID"),
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_CERT_URL")
+    }),
+    {'databaseURL': os.getenv("FIREBASE_DB_URL")}
+)
 
-# Для веба
+db_ref = db.reference("/")
+
+bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+dp = Dispatcher()
+
 app = FastAPI()
 app.mount("/fonts", StaticFiles(directory="docs/fonts"), name="fonts")
+
 env = Environment(loader=FileSystemLoader("docs"))
 
-# Структура состояния огонька
-state = {
-    "name": "Огонёк",
-    "started_at": None,
-    "streak": 0,
-    "missed_days": {MATTHEW: 0, YANA: 0},
-    "status": "🔥",
-    "tasks": [],
-    "progress": {},  # task_id -> list of user_ids
-}
-
-AVAILABLE_TASKS = [
-    {"type": "sticker", "desc": "Отправить стикер"},
-    {"type": "video", "desc": "Отправить видео"},
-    {"type": "messages", "count": c, "desc": f"Отправить {c} сообщений"} for c in [10, 20, 30, 40, 50, 60]
-] + [
-    {"type": "morning", "desc": "Пожелать доброго утра"},
-    {"type": "night", "desc": "Пожелать спокойной ночи"},
+# ----- ЗАДАНИЯ -----
+ALL_TASKS = [
+    "Отправить стикер",
+    "Отправить видео",
+    "Отправить голосовое сообщение",
+    "Отправить 20 сообщений",
+    "Отправить 30 сообщений",
+    "Отправить 40 сообщений",
+    "Отправить 50 сообщений",
+    "Отправить 60 сообщений",
+    "Отправить фото",
+    "Отправить местоположение",
+    "Пожелать доброго утра",
+    "Пожелать спокойной ночи"
 ]
 
-KEYWORDS = {
-    "morning": ["доброе утро", "доброго утра", "доброе утречко", "доброго утречка"],
-    "night": ["спокойной ночи", "сладких снов", "спокойной ночки"]
-}
+MORNING_PHRASES = ["доброе утро", "доброго утра", "доброе утречко", "доброго утречка"]
+NIGHT_PHRASES = ["спокойной ночи", "сладких снов", "спокойной ночки"]
 
-# ================== BOT LOGIC ===================
-
-def get_user_nickname(user_id):
-    return "Матвейка" if user_id == MATTHEW else "Яночка"
-
-def get_current_time():
-    return datetime.utcnow() + timedelta(hours=3)  # MSK
-
-def generate_tasks():
-    chosen = random.sample(AVAILABLE_TASKS, 3)
-    state["tasks"] = chosen
-    state["progress"] = {i: [] for i in range(3)}
-
-def reset_day():
-    dt = get_current_time()
-    if state["started_at"] is None:
-        state["started_at"] = dt.date()
-
-    # Проверка выполнения
-    everyone_done = True
-    for uid in [MATTHEW, YANA]:
-        for i in range(3):
-            if uid not in state["progress"].get(i, []):
-                state["missed_days"][uid] += 1
-                everyone_done = False
-                break
-        else:
-            state["missed_days"][uid] = 0
-
-    if all(uid in state["progress"][i] for i in range(3) for uid in [MATTHEW, YANA]):
-        state["streak"] += 1
-    elif not everyone_done:
-        state["status"] = "🔥" if state["status"] != "😭" else "😭"  # Не обнуляем, просто заморозка
-
-    for uid in [MATTHEW, YANA]:
-        if state["missed_days"][uid] >= 3:
-            asyncio.create_task(bot.send_message(GROUP_ID, f"🥺 Огонёк потух, потому что {get_user_nickname(uid)} три дня подряд не выполнял задания. Серия обнуляется."))
-            state["streak"] = 0
-            state["started_at"] = None
-            state["status"] = "😭"
-            break
-        elif any(uid not in state["progress"][i] for i in range(3)):
-            asyncio.create_task(bot.send_message(GROUP_ID, f"⏳ {get_user_nickname(uid)} не выполнил все задания, огонёк сегодня стал серым."))
-            state["status"] = "🧊"
-
-    generate_tasks()
-    asyncio.create_task(post_tasks())
-
-async def post_tasks():
-    lines = [f"📋 Задания на сегодня ({get_current_time().date()}):"]
-    for i, task in enumerate(state["tasks"]):
-        lines.append(f"{i+1}. {task['desc']}")
-    msg = "\n".join(lines)
-    await bot.send_message(GROUP_ID, msg)
-
-async def check_task_completion(user_id, message: Message):
-    for i, task in enumerate(state["tasks"]):
-        if user_id in state["progress"].get(i, []):
-            continue
-
-        if task["type"] == "sticker" and message.sticker:
-            pass
-        elif task["type"] == "video" and message.video:
-            pass
-        elif task["type"] == "messages":
-            key = f"messages_{user_id}_{i}"
-            count = message.chat.get_or_add_int(key, 0) + 1
-            message.chat.set_int(key, count)
-            if count < task["count"]:
-                continue
-        elif task["type"] in KEYWORDS:
-            if not any(word in message.text.lower() for word in KEYWORDS[task["type"]]):
-                continue
-        else:
-            continue
-
-        state["progress"][i].append(user_id)
-        done = sum(user_id in v for v in state["progress"].values())
-        await message.answer(f"✅ {get_user_nickname(user_id)} выполнил задание {i+1}! ({done}/3)")
-
-@dp.message(F.chat.id == GROUP_ID)
-async def group_handler(message: Message):
-    user_id = message.from_user.id
-    if user_id not in [MATTHEW, YANA]:
-        return
-    if message.text:
-        text = message.text.strip().lower()
-        if text.startswith(".имя"):
-            await message.answer("✏️ Введите новое имя огонька:")
-            # Сделай FSM если надо
-        elif text.startswith(".огонек"):
-            await message.answer(f"{state['name']} {state['status']}\nСерия: {state['streak']}\nС {state['started_at']}")
-        elif text.startswith(".задания"):
-            lines = [f"📋 Текущие задания:"]
-            for i, task in enumerate(state["tasks"]):
-                p = len(state["progress"].get(i, []))
-                lines.append(f"{i+1}. {task['desc']} ({p}/2)")
-            await message.answer("\n".join(lines))
-        elif text.startswith(".статистика"):
-            stats = [f"📊 Статистика:"]
-            for uid in [MATTHEW, YANA]:
-                stats.append(f"{get_user_nickname(uid)}: {3 - sum(uid in v for v in state['progress'].values())}/3 осталось")
-            await message.answer("\n".join(stats))
-        else:
-            await check_task_completion(user_id, message)
-    else:
-        await check_task_completion(user_id, message)
-
-@dp.message()
-async def other_handler(message: Message):
-    pass  # игнор
-
+# Запуск задач в 00:00
 async def scheduler():
     while True:
-        now = get_current_time()
-        if now.hour == 0 and now.minute == 0:
-            reset_day()
-        await asyncio.sleep(60)
+        now = datetime.now()
+        target = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        wait_time = (target - now).total_seconds()
+        await asyncio.sleep(wait_time)
+        await generate_daily_tasks()
 
-# ============= FASTAPI ROUTES ===============
+async def generate_daily_tasks():
+    today = datetime.now().strftime("%Y-%m-%d")
+    tasks = random.sample(ALL_TASKS, 3)
+    db_ref.child("daily").set({
+        "date": today,
+        "tasks": tasks,
+        "progress": {
+            "0": [],
+            "1": []
+        }
+    })
+    db_ref.child("meta").update({
+        "message_pinned": False
+    })
 
+    msg = "<b>🔥 Задания на сегодня:</b>\\n"
+    for task in tasks:
+        msg += f"▪️ {task}\\n"
+
+    await bot.send_message(GROUP_ID, msg)
+
+# Обработка команд
+@dp.message(CommandStart())
+async def start(message: Message):
+    await message.answer("Бот активен! Используй .огонек, .имя, .задания и т.д.")
+
+@dp.message(F.chat.id == GROUP_ID)
+async def handle_text(message: Message):
+    text = message.text.lower()
+    user_id = message.from_user.id
+    nickname = "Матвейка" if user_id == MATTHEW else "Яночка" if user_id == YANA else "?"
+
+    if text.startswith(".огонек"):
+        meta = db_ref.child("meta").get()
+        await message.reply(f"{meta.get('name', 'Огонёк')} — {meta.get('streak', 0)}🔥")
+
+    elif text.startswith(".имя"):
+        new_name = message.text[5:].strip()
+        if new_name:
+            db_ref.child("meta/name").set(new_name)
+            await message.reply(f"Теперь огонёк называется <b>{new_name}</b>")
+        else:
+            await message.reply("Напиши новое имя после .имя")
+
+    elif text.startswith(".задания"):
+        daily = db_ref.child("daily").get()
+        msg = f"🔥 Задания на {daily['date']}\\n"
+        for task in daily["tasks"]:
+            msg += f"▪️ {task}\\n"
+        await message.reply(msg)
+
+    else:
+        await check_for_task_completion(message, nickname, user_id)
+
+async def check_for_task_completion(message: Message, nickname: str, user_id: int):
+    daily = db_ref.child("daily").get()
+    if not daily:
+        return
+
+    idx = "0" if user_id == MATTHEW else "1" if user_id == YANA else None
+    if idx is None:
+        return
+
+    done = daily["progress"].get(idx, [])
+    updated = False
+
+    for task in daily["tasks"]:
+        if task in done:
+            continue
+        if task == "Отправить стикер" and message.sticker:
+            done.append(task)
+        elif task == "Отправить видео" and message.video:
+            done.append(task)
+        elif task == "Отправить голосовое сообщение" and message.voice:
+            done.append(task)
+        elif task == "Отправить фото" and message.photo:
+            done.append(task)
+        elif task == "Отправить местоположение" and message.location:
+            done.append(task)
+        elif task.startswith("Отправить") and "сообщений" in task:
+            count = db_ref.child("counts").child(idx).get() or 0
+            db_ref.child("counts").child(idx).set(count + 1)
+            required = int(task.split()[1])
+            if count + 1 >= required:
+                done.append(task)
+        elif task == "Пожелать доброго утра" and any(p in message.text.lower() for p in MORNING_PHRASES):
+            done.append(task)
+        elif task == "Пожелать спокойной ночи" and any(p in message.text.lower() for p in NIGHT_PHRASES):
+            done.append(task)
+
+    if len(done) > len(daily["progress"][idx]):
+        db_ref.child("daily/progress").child(idx).set(done)
+        n = len(done)
+        await bot.send_message(GROUP_ID, f"✅ {nickname} выполнил задание ({n}/3)")
+
+# ----- FastAPI -----
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    template = env.get_template("index.html")
-    rendered = template.render(
-        name=state["name"],
-        status=state["status"],
-        streak=state["streak"],
-        started_at=state["started_at"],
+    daily = db_ref.child("daily").get() or {}
+    meta = db_ref.child("meta").get() or {}
+    tasks = daily.get("tasks", [])
+    progress = daily.get("progress", {"0": [], "1": []})
+    streak = meta.get("streak", 0)
+    name = meta.get("name", "Огонёк")
+    start_date = meta.get("start_date", datetime.now().strftime("%Y-%m-%d"))
+
+    rendered = env.get_template("index.html").render(
         background=BACKGROUND,
-        tasks=[
-            {
-                "desc": task["desc"],
-                "done": len(state["progress"].get(i, [])),
-            }
-            for i, task in enumerate(state["tasks"])
-        ]
+        name=name,
+        streak=streak,
+        date=start_date,
+        tasks=tasks,
+        p0=len(progress.get("0", [])),
+        p1=len(progress.get("1", [])),
     )
     return HTMLResponse(rendered)
 
-@app.get("/api/state")
-async def get_state():
-    return JSONResponse({
-        "name": state["name"],
-        "status": state["status"],
-        "streak": state["streak"],
-        "started_at": str(state["started_at"]),
-        "tasks": [
-            {
-                "desc": task["desc"],
-                "done": len(state["progress"].get(i, [])),
-            }
-            for i, task in enumerate(state["tasks"])
-        ]
-    })
-
-# ============= RUN ==========================
-
+# ----- Запуск -----
 async def main():
-    logging.basicConfig(level=logging.INFO)
     asyncio.create_task(scheduler())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(main())
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    asyncio.run(main())
