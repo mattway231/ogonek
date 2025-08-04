@@ -3,14 +3,14 @@ import logging
 import random
 import datetime
 import json
-import asyncio
+import re
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, filters
 )
 
-BOT_TOKEN = "8215048455:AAHo0yQazQdG93cvlDuhjn67VT-OUt7I9VM"  # замените на токен бота
+BOT_TOKEN = "8215048455:AAHo0yQazQdG93cvlDuhjn67VT-OUt7I9VM"  # 🔁 Укажи свой настоящий токен бота
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ def start_fire(chat_id, state):
         "missed": 0,
         "tasks": [],
         "last_date": None,
-        "today_done": {"me": False, "them": False},
+        "completed_tasks": {"me": [], "them": []},
         "message_count": {"me": 0, "them": 0}
     }
 
@@ -56,42 +56,54 @@ def next_day(chat_id, state):
     info = state[str(chat_id)]
     info["day"] += 1
     info["tasks"] = random.sample(TASKS, 3)
-    info["today_done"] = {"me": False, "them": False}
+    info["completed_tasks"] = {"me": [], "them": []}
     info["message_count"] = {"me": 0, "them": 0}
 
 def check_failure(chat_id, state):
     info = state[str(chat_id)]
+    me_done = len(info["completed_tasks"]["me"]) >= 1
+    them_done = len(info["completed_tasks"]["them"]) >= 1
+
+    if not me_done or not them_done:
+        info["missed"] += 1
+        if info["status"] == "🔥":
+            info["status"] = "🧊"
+
     if info["missed"] >= 3:
         info["status"] = "😭"
 
+# ⏰ Ежедневные задачи
 async def send_new_tasks(context: ContextTypes.DEFAULT_TYPE):
     state = load_state()
     today = datetime.date.today().isoformat()
+
     for chat_id, info in state.items():
         if info["status"] == "😭":
             continue
+
         if info.get("last_date") != today:
-            if info["day"] > 0 and (not info["today_done"]["me"] or not info["today_done"]["them"]):
-                info["missed"] += 1
-                if info["status"] == "🔥":
-                    info["status"] = "🧊"
             check_failure(chat_id, state)
             next_day(chat_id, state)
             info["last_date"] = today
+
             tasks = info["tasks"]
             text = (
-                f"привет! я - Огонек Матвея, общайся с матвеем каждый день, чтобы я продолжал гореть.\n\n"
-                f"задания на сегодня: {', '.join(tasks)}\n\n"
-                "если кто-то из вас двоих не сделает задание, то огонек станет серым, "
-                "если 3 дня подряд пропускать задания, огонек потухнет."
+                f"🔥 привет! я - Огонёк. общайся с собеседником каждый день, чтобы я продолжал гореть.\n\n"
+                f"задания на сегодня:\n• " + "\n• ".join(tasks) + "\n\n"
+                "если хотя бы один из вас не выполнит задание, огонёк станет серым.\n"
+                "3 дня подряд без выполнения — огонёк потухнет."
             )
-            await context.bot.send_message(int(chat_id), text)
+            await context.bot.send_message(chat_id=int(chat_id), text=text)
+
     save_state(state)
 
-def task_completed(task, msg, info, who):
+# ✅ Проверка выполнения задачи
+def is_task_done(task: str, msg: Update.message, who: str, info) -> bool:
     if task.startswith("написать"):
-        needed = int(task.split()[1])
-        return info["message_count"][who] >= needed
+        match = re.search(r"написать (\d+) сообщений", task)
+        if match:
+            required = int(match.group(1))
+            return info["message_count"][who] >= required
     if task == "отправить голосовое сообщение" and msg.voice:
         return True
     if task == "отправить видеосообщение (кружок)" and msg.video_note:
@@ -116,10 +128,12 @@ def task_completed(task, msg, info, who):
         return True
     return False
 
+# 📩 Обработка всех сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    if not msg:
+    if not msg or not msg.chat or not msg.from_user:
         return
+
     chat_id = str(msg.chat_id)
     sender_id = msg.from_user.id
     state = load_state()
@@ -129,57 +143,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_fire(chat_id, state)
         info = state[chat_id]
         await msg.reply_text(
-            "привет! я - Огонек Матвея, общайся с матвеем каждый день, чтобы я продолжал гореть.\n\n"
-            "задания на сегодня: (будут выданы в полночь)\n\n"
-            "если кто-то из вас двоих не сделает задание, то огонек станет серым, "
-            "если 3 дня подряд пропускать задания, огонек потухнет."
+            "привет! я - Огонёк. задания будут выданы в полночь по МСК.\n"
+            "выполняйте их каждый день вдвоём, чтобы Огонёк продолжал гореть!"
         )
         save_state(state)
         return
 
-    # !огонек
+    # Команда "!огонек"
     if msg.text and msg.text.strip() == "!огонек":
-        if info["status"] == "😭":
-            await msg.reply_text("Огонёк потух 😭")
-            return
         tasks = info.get("tasks", [])
-        done_me = info["today_done"]["me"]
-        done_them = info["today_done"]["them"]
+        done_me = len(info["completed_tasks"]["me"]) >= 1
+        done_them = len(info["completed_tasks"]["them"]) >= 1
         await msg.reply_text(
             f"🔥 серия огонька\n"
             f"статус: {info['status']}\n"
             f"дата начала: {info['started']}\n"
-            f"задания на сегодня: {', '.join(tasks)}\n"
-            f"выполнено: {1 if done_me else 0}/2 (вы), {1 if done_them else 0}/2 (собеседник)"
+            f"день: {info['day']}\n"
+            f"задания на сегодня:\n• " + "\n• ".join(tasks) + "\n\n"
+            f"выполнено: {'✅' if done_me else '❌'} вы, {'✅' if done_them else '❌'} собеседник"
         )
         return
 
     who = "me" if sender_id == context.bot.id else "them"
     info["message_count"][who] += 1
 
+    new_done = False
     for task in info.get("tasks", []):
-        if task_completed(task, msg, info, who):
-            info["today_done"][who] = True
+        if task in info["completed_tasks"][who]:
+            continue
+        if is_task_done(task, msg, who, info):
+            info["completed_tasks"][who].append(task)
+            new_done = True
 
-    state[chat_id] = info
+    if new_done:
+        await msg.reply_text(f"✅ Задание выполнено! Огонёк разгорается 🔥")
+
     save_state(state)
 
+# 🚀 Запуск
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(MessageHandler(filters.ALL, handle_message))
 
-    # исправляем ошибку: инициализация job_queue явно
-    job_queue = app.job_queue
-    job_queue.run_daily(
+    app.job_queue.run_daily(
         send_new_tasks,
         time=datetime.time(hour=0, minute=0, tzinfo=datetime.timezone(datetime.timedelta(hours=3)))
     )
 
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    await app.updater.idle()
+    await app.run_polling()
 
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())
