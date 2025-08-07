@@ -2,24 +2,23 @@ import os
 import random
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 
-from telegram import Update, Bot, Chat, User, Message
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-    CallbackContext,
-    ChatMemberHandler
-)
-from telegram.constants import ChatAction, ParseMode
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.types import Message, ChatMemberUpdated
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.enums import ChatMemberStatus
+from aiogram.filters import ChatMemberUpdatedFilter, IS_MEMBER, IS_NOT_MEMBER
+from aiogram.utils.chat_action import ChatActionMiddleware
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 import pytz
 
 # Настройка логгирования
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -142,21 +141,26 @@ class FireState:
     def get_status_message(self) -> str:
         """Формирование сообщения о статусе"""
         emoji = self.get_status_emoji()
-        message = f"Статус: {emoji} Огонёк\n"
+        message = f"<b>{emoji} Статус Огонька:</b>\n\n"
         
         if self.status != "dead":
-            message += f"Серия: {self.streak} дней\n"
+            message += f"🔥 Серия: {self.streak} дней\n"
             if self.series_start_date:
                 start_date = self.series_start_date.strftime("%d.%m.%Y")
-                message += f"Дата начала серии: {start_date}\n"
+                message += f"📅 Дата начала: {start_date}\n"
         
-        message += "\n🔥 Задания на сегодня:\n"
+        message += "\n<b>🎯 Задания на сегодня:</b>\n"
         message += self.format_tasks()
         
         return message
 
 # Глобальное состояние
 fire_state = FireState()
+
+# Инициализация бота
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+scheduler = AsyncIOScheduler(timezone=MOSCOW_TZ)
 
 # Вспомогательные функции
 def get_user_type(user_id: int) -> Optional[str]:
@@ -166,13 +170,13 @@ def get_user_type(user_id: int) -> Optional[str]:
         return "yana"
     return None
 
-def is_group_chat(update: Update) -> bool:
-    return update.effective_chat.id == GROUP_ID
+def is_group_chat(message: types.Message) -> bool:
+    return message.chat.id == GROUP_ID
 
 def get_cute_name(user_type: str) -> str:
     return "Матвейчик" if user_type == "matthew" else "Янчик"
 
-async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
+async def send_reminder():
     """Отправка напоминания о заданиях"""
     if fire_state.status == "frozen" and not fire_state.check_daily_completion():
         cute_matthew = get_cute_name("matthew")
@@ -192,38 +196,71 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
             f"сегодняшние задания ждут вашего выполнения, милые!",
         ]
         
-        await context.bot.send_message(
+        await bot.send_message(
             chat_id=GROUP_ID,
             text=random.choice(reminder_messages)
+        
+async def new_day_tasks():
+    """Обновление заданий в 00:00 по МСК"""
+    global fire_state
+    
+    # Проверка выполнения вчерашних заданий
+    yesterday_success = fire_state.check_daily_completion()
+    
+    # Обновление состояния
+    fire_state.update_status(yesterday_success)
+    
+    # Инициализация нового дня
+    fire_state.current_date = datetime.now(MOSCOW_TZ).date()
+    fire_state.initialize_new_day()
+    
+    # Отправка новых заданий
+    status_emoji = fire_state.get_status_emoji()
+    message = (
+        f"{status_emoji} <b>Новый день! Новые задания!</b> {status_emoji}\n\n"
+        f"{fire_state.get_status_message()}"
+    )
+    
+    if fire_state.status == "frozen":
+        cute_matthew = get_cute_name("matthew")
+        cute_yana = get_cute_name("yana")
+        message += (
+            "\n\n💔 Огонёк потускнел... "
+            f"{cute_matthew} и {cute_yana}, сегодня нужно обязательно "
+            "выполнить все задания, чтобы он снова загорелся!"
+        )
+    
+    await bot.send_message(
+        chat_id=GROUP_ID,
+        text=message,
+        parse_mode="HTML"
     )
 
 # Обработчики команд и сообщений
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
     """Обработка команды /start"""
-    if is_group_chat(update):
-        await update.message.reply_text(
+    if is_group_chat(message):
+        await message.reply(
             "Привет! Я - Огонёк, буду помогать вам сохранять тепло ваших отношений! "
             "Напишите !огонек чтобы узнать текущий статус."
         )
 
-async def fire_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@dp.message(F.text == "!огонек")
+async def fire_command(message: types.Message):
     """Обработка команды !огонек"""
-    if is_group_chat(update):
-        await update.message.reply_text(
+    if is_group_chat(message):
+        await message.reply(
             fire_state.get_status_message(),
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode="HTML"
         )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@dp.message(F.chat.id == GROUP_ID)
+async def handle_message(message: types.Message):
     """Обработка всех сообщений в чате"""
-    if not is_group_chat(update) or not update.message:
-        return
-    
-    user_type = get_user_type(update.message.from_user.id)
+    user_type = get_user_type(message.from_user.id)
     if not user_type:
         return
-    
-    message = update.message
     
     # Обработка всех типов заданий
     for task_idx in fire_state.task_indices:
@@ -280,92 +317,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if any(phrase in text for phrase in phrases):
                 fire_state.completed_tasks[task_idx][user_type] = True
 
-async def new_day_tasks(context: ContextTypes.DEFAULT_TYPE):
-    """Обновление заданий в 00:00 по МСК"""
-    global fire_state
-    
-    # Проверка выполнения вчерашних заданий
-    yesterday_success = fire_state.check_daily_completion()
-    
-    # Обновление состояния
-    fire_state.update_status(yesterday_success)
-    
-    # Инициализация нового дня
-    fire_state.current_date = datetime.now(MOSCOW_TZ).date()
-    fire_state.initialize_new_day()
-    
-    # Отправка новых заданий
-    status_emoji = fire_state.get_status_emoji()
-    message = (
-        f"{status_emoji} *Новый день! Новые задания!* {status_emoji}\n\n"
-        f"{fire_state.get_status_message()}"
-    )
-    
-    if fire_state.status == "frozen":
-        cute_matthew = get_cute_name("matthew")
-        cute_yana = get_cute_name("yana")
-        message += (
-            "\n\n💔 Огонёк потускнел... "
-            f"{cute_matthew} и {cute_yana}, сегодня нужно обязательно "
-            "выполнить все задания, чтобы он снова загорелся!"
-        )
-    
-    await context.bot.send_message(
-        chat_id=GROUP_ID,
-        text=message,
-        parse_mode=ParseMode.MARKDOWN
-    )
-    
-    # Планирование напоминаний
-    for hour in [10, 14, 18, 22]:  # 4 раза в день
-        context.job_queue.run_daily(
-            send_reminder,
-            time=datetime.strptime(f"{hour}:00", "%H:%M").time(),
-            days=(0, 1, 2, 3, 4, 5, 6),
-            tzinfo=MOSCOW_TZ
-        )
-
-async def welcome_yana(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@dp.chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
+async def on_user_join(event: ChatMemberUpdated):
     """Приветствие при добавлении Яны в группу"""
-    if (
-        is_group_chat(update) and
-        update.chat_member.new_chat_member.user.id == YANA_ID and
-        update.chat_member.old_chat_member.status == "left"
-    ):
-        await context.bot.send_message(
+    if event.chat.id == GROUP_ID and event.new_chat_member.user.id == YANA_ID:
+        await bot.send_message(
             chat_id=GROUP_ID,
             text=(
                 f"Привет, Яна! Я - Огонёк, общайся с Матвеем каждый день, "
                 f"чтобы я продолжал гореть.\n\n{fire_state.get_status_message()}"
             ),
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode="HTML"
         )
 
-def main() -> None:
-    """Запуск бота"""
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Обработчики команд
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.Regex(r"!огонек"), fire_command))
-    
-    # Обработчик добавления участников
-    application.add_handler(ChatMemberHandler(welcome_yana, ChatMemberHandler.CHAT_MEMBER))
-    
-    # Обработчик сообщений
-    application.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, handle_message))
-    
-    # Планировщик заданий
-    job_queue = application.job_queue
-    job_queue.run_daily(
+async def main():
+    """Основная функция запуска"""
+    # Настройка планировщика
+    scheduler.add_job(
         new_day_tasks,
-        time=datetime.strptime("00:00", "%H:%M").time(),
-        days=(0, 1, 2, 3, 4, 5, 6),
-        tzinfo=MOSCOW_TZ
+        CronTrigger(hour=0, minute=0, timezone=MOSCOW_TZ)
     )
     
+    # Напоминания 4 раза в день
+    for hour in [10, 14, 18, 22]:
+        scheduler.add_job(
+            send_reminder,
+            CronTrigger(hour=hour, minute=0, timezone=MOSCOW_TZ)
+        )
+    
+    scheduler.start()
+    
     # Запуск бота
-    application.run_polling()
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
