@@ -6,8 +6,8 @@ from typing import Dict, List, Optional, Union
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import Message, ChatMemberUpdated, CallbackQuery
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import Message, ChatMemberUpdated, CallbackQuery, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.enums import ChatMemberStatus
 from aiogram.filters import ChatMemberUpdatedFilter, IS_MEMBER, IS_NOT_MEMBER
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -30,22 +30,22 @@ BOT_TOKEN = os.environ['BOT_TOKEN']
 
 # Определение заданий
 TASKS = [
-    {"type": "message_count", "count": 10, "desc": "написать 10 сообщений"},
-    {"type": "message_count", "count": 20, "desc": "написать 20 сообщений"},
-    {"type": "message_count", "count": 30, "desc": "написать 30 сообщений"},
-    {"type": "message_count", "count": 40, "desc": "написать 40 сообщений"},
-    {"type": "message_count", "count": 50, "desc": "написать 50 сообщений"},
-    {"type": "voice", "desc": "отправить голосовое сообщение"},
-    {"type": "video_note", "desc": "отправить видеосощщение (кружок)"},
-    {"type": "location", "desc": "отправить геолокацию"},
-    {"type": "video", "desc": "отправить видео"},
-    {"type": "photo", "desc": "отправить фото"},
-    {"type": "long_text", "min_len": 50, "desc": "отправить сообщение >50 символов"},
-    {"type": "long_text", "min_len": 100, "desc": "отправить сообщение >100 символов"},
-    {"type": "sticker", "desc": "отправить стикер"},
-    {"type": "gif", "desc": "отправить гифку"},
-    {"type": "morning", "desc": "пожелать доброго утра"},
-    {"type": "evening", "desc": "пожелать спокойной ночи"},
+    {"id": 0, "type": "message_count", "count": 10, "desc": "написать 10 сообщений"},
+    {"id": 1, "type": "message_count", "count": 20, "desc": "написать 20 сообщений"},
+    {"id": 2, "type": "message_count", "count": 30, "desc": "написать 30 сообщений"},
+    {"id": 3, "type": "message_count", "count": 40, "desc": "написать 40 сообщений"},
+    {"id": 4, "type": "message_count", "count": 50, "desc": "написать 50 сообщений"},
+    {"id": 5, "type": "voice", "desc": "отправить голосовое сообщение"},
+    {"id": 6, "type": "video_note", "desc": "отправить видеосощщение (кружок)"},
+    {"id": 7, "type": "location", "desc": "отправить геолокацию"},
+    {"id": 8, "type": "video", "desc": "отправить видео"},
+    {"id": 9, "type": "photo", "desc": "отправить фото"},
+    {"id": 10, "type": "long_text", "min_len": 50, "desc": "отправить сообщение >50 символов"},
+    {"id": 11, "type": "long_text", "min_len": 100, "desc": "отправить сообщение >100 символов"},
+    {"id": 12, "type": "sticker", "desc": "отправить стикер"},
+    {"id": 13, "type": "gif", "desc": "отправить гифку"},
+    {"id": 14, "type": "morning", "desc": "пожелать доброго утра"},
+    {"id": 15, "type": "evening", "desc": "пожелать спокойной ночи"},
 ]
 
 # Состояние бота
@@ -57,13 +57,19 @@ class FireState:
         self.series_start_date: Optional[datetime] = None
         self.current_date: datetime = datetime.now(MOSCOW_TZ).date()
         self.task_indices: List[int] = []
+        self.tomorrow_tasks: List[int] = []
         self.completed_tasks: Dict[int, Dict[str, bool]] = {}
         self.message_counters: Dict[int, Dict[str, int]] = {}
         self.initialize_new_day()
         
     def initialize_new_day(self):
-        """Инициализация нового дня и заданий"""
-        self.task_indices = random.sample(range(len(TASKS)), 3)
+        """Инициализация нового дня с заданиями"""
+        if self.tomorrow_tasks:
+            self.task_indices = self.tomorrow_tasks
+            self.tomorrow_tasks = []
+        else:
+            self.task_indices = random.sample(range(len(TASKS)), 3)
+        
         self.completed_tasks = {}
         self.message_counters = {}
         
@@ -158,6 +164,7 @@ fire_state = FireState()
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler(timezone=MOSCOW_TZ)
+user_state = {}  # Для хранения состояния админ-меню
 
 # Вспомогательные функции
 def get_user_type(user_id: int) -> Optional[str]:
@@ -212,14 +219,14 @@ async def send_reminder():
             f"🚨 {cute_matthew} и {cute_yana}! Огонёк сейчас не горит... "
             f"Напоминаю, что нужно выполнить сегодняшние задания, чтобы он снова засиял! 💫",
             
-            f"✨ Приветки! Огонёк ждёт вашего внимания. "
+            f"✨ Забор покрасьте! Огонёк ждёт вашего внимания. "
             f"Не забыли про задания на сегодня?",
             
             f"{cute_matthew} и {cute_yana}, ваш огонёк скучает! "
             f"Подарите ему немного тепла, выполнив задания 🔥",
             
             f"⏰ Тик-так, время идёт! Огонёк напоминает: "
-            f"сегодняшние задания ждут вашего выполнения, тигры",
+            f"сегодняшние задания ждут вашего выполнения!",
         ]
         
         await bot.send_message(
@@ -261,10 +268,49 @@ async def new_day_tasks():
 def get_admin_keyboard():
     """Клавиатура админ-панели"""
     builder = InlineKeyboardBuilder()
-    builder.button(text="🔄 Перевыбрать задания сегодня", callback_data="retry_tasks")
-    builder.button(text="📅 Выбрать задания на завтра", callback_data="set_tomorrow_tasks")
+    builder.button(text="📝 Выбрать задания на сегодня", callback_data="select_today_tasks")
+    builder.button(text="📅 Выбрать задания на завтра", callback_data="select_tomorrow_tasks")
     builder.button(text="🔥 Установить серию", callback_data="set_streak")
     builder.button(text="📨 Отправить сообщение", callback_data="send_message")
+    builder.button(text="🔄 Обновить статус", callback_data="refresh_status")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_task_selection_keyboard(target: str):
+    """Клавиатура для выбора заданий"""
+    builder = InlineKeyboardBuilder()
+    
+    # Группируем задания по категориям
+    categories = {
+        "Сообщения": [0, 1, 2, 3, 4, 10, 11],
+        "Медиа": [5, 6, 7, 8, 9, 12, 13],
+        "Пожелания": [14, 15]
+    }
+    
+    for category, task_ids in categories.items():
+        builder.button(
+            text=f"📌 {category}",
+            callback_data=f"category_{target}_{'_'.join(map(str, task_ids))}"
+        )
+    
+    builder.button(text="🎲 Случайные 3 задания", callback_data=f"random_{target}")
+    builder.button(text="⬅️ Назад", callback_data="back_to_admin")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_tasks_from_category(category_tasks: str):
+    """Получение клавиатуры с заданиями из категории"""
+    task_ids = list(map(int, category_tasks.split('_')))
+    builder = InlineKeyboardBuilder()
+    
+    for task_id in task_ids:
+        task = TASKS[task_id]
+        builder.button(
+            text=task["desc"],
+            callback_data=f"task_{task_id}"
+        )
+    
+    builder.button(text="⬅️ Назад", callback_data="back_to_task_selection")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -272,6 +318,7 @@ def get_admin_keyboard():
 async def admin_panel(message: Message):
     """Обработка команды /admin"""
     if message.from_user.id == MATTHEW_ID and message.chat.type == "private":
+        user_state[message.from_user.id] = {"mode": "admin"}
         await message.answer(
             "🔧 <b>Админ-панель</b>\n\n"
             "Выберите действие:",
@@ -279,62 +326,222 @@ async def admin_panel(message: Message):
             parse_mode="HTML"
         )
 
-@dp.callback_query(F.data == "retry_tasks")
-async def retry_tasks(callback: CallbackQuery):
-    """Перевыбор заданий на сегодня"""
-    if callback.from_user.id == MATTHEW_ID:
+@dp.callback_query(F.data.startswith("category_"))
+async def select_category(callback: CallbackQuery):
+    """Выбор категории заданий"""
+    if callback.from_user.id != MATTHEW_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    _, target, category_tasks = callback.data.split('_', 2)
+    user_state[callback.from_user.id] = {
+        "mode": "select_tasks",
+        "target": target,
+        "selected_tasks": []
+    }
+    
+    await callback.message.edit_text(
+        "Выберите задания из категории:",
+        reply_markup=get_tasks_from_category(category_tasks)
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("task_"))
+async def select_task(callback: CallbackQuery):
+    """Выбор конкретного задания"""
+    if callback.from_user.id != MATTHEW_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    task_id = int(callback.data.split('_')[1])
+    user_state[callback.from_user.id]["selected_tasks"].append(task_id)
+    
+    if len(user_state[callback.from_user.id]["selected_tasks"]) >= 3:
+        target = user_state[callback.from_user.id]["target"]
+        
+        if target == "today":
+            fire_state.task_indices = user_state[callback.from_user.id]["selected_tasks"][:3]
+            fire_state.initialize_new_day()
+            await callback.message.edit_text(
+                "✅ Задания на сегодня обновлены!\n\n" + fire_state.get_status_message(),
+                parse_mode="HTML"
+            )
+        else:
+            fire_state.tomorrow_tasks = user_state[callback.from_user.id]["selected_tasks"][:3]
+            tasks_list = "\n".join([f"• {TASKS[idx]['desc']}" for idx in fire_state.tomorrow_tasks])
+            await callback.message.edit_text(
+                f"✅ Задания на завтра установлены:\n{tasks_list}",
+                parse_mode="HTML"
+            )
+        
+        user_state[callback.from_user.id] = {"mode": "admin"}
+    else:
+        await callback.answer(f"Выбрано задание: {TASKS[task_id]['desc']}")
+
+@dp.callback_query(F.data.startswith("random_"))
+async def select_random_tasks(callback: CallbackQuery):
+    """Выбор случайных заданий"""
+    if callback.from_user.id != MATTHEW_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    target = callback.data.split('_')[1]
+    
+    if target == "today":
+        fire_state.task_indices = random.sample(range(len(TASKS)), 3)
         fire_state.initialize_new_day()
         await callback.message.edit_text(
-            "🔄 Задания на сегодня перевыбраны!\n\n" + fire_state.get_status_message(),
+            "🎲 Случайные задания на сегодня:\n\n" + fire_state.get_status_message(),
             parse_mode="HTML"
         )
-        await callback.answer()
+    else:
+        fire_state.tomorrow_tasks = random.sample(range(len(TASKS)), 3)
+        tasks_list = "\n".join([f"• {TASKS[idx]['desc']}" for idx in fire_state.tomorrow_tasks])
+        await callback.message.edit_text(
+            f"🎲 Случайные задания на завтра:\n{tasks_list}",
+            parse_mode="HTML"
+        )
+    
+    await callback.answer()
 
-@dp.callback_query(F.data == "set_tomorrow_tasks")
-async def set_tomorrow_tasks(callback: CallbackQuery):
+@dp.callback_query(F.data == "select_today_tasks")
+async def select_today_tasks(callback: CallbackQuery):
+    """Выбор заданий на сегодня"""
+    if callback.from_user.id != MATTHEW_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    user_state[callback.from_user.id] = {
+        "mode": "select_tasks",
+        "target": "today",
+        "selected_tasks": []
+    }
+    
+    await callback.message.edit_text(
+        "📝 Выберите 3 задания на сегодня:",
+        reply_markup=get_task_selection_keyboard("today"))
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data == "select_tomorrow_tasks")
+async def select_tomorrow_tasks(callback: CallbackQuery):
     """Выбор заданий на завтра"""
-    if callback.from_user.id == MATTHEW_ID:
-        # Здесь можно реализовать выбор конкретных заданий
-        await callback.answer("Функция в разработке", show_alert=True)
+    if callback.from_user.id != MATTHEW_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    user_state[callback.from_user.id] = {
+        "mode": "select_tasks",
+        "target": "tomorrow",
+        "selected_tasks": []
+    }
+    
+    await callback.message.edit_text(
+        "📅 Выберите 3 задания на завтра:",
+        reply_markup=get_task_selection_keyboard("tomorrow"))
+    )
+    await callback.answer()
 
 @dp.callback_query(F.data == "set_streak")
 async def set_streak(callback: CallbackQuery):
     """Установка серии"""
-    if callback.from_user.id == MATTHEW_ID:
-        await callback.message.answer(
-            "Введите новую длину серии (число дней):"
-        )
-        await callback.answer()
+    if callback.from_user.id != MATTHEW_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    user_state[callback.from_user.id] = {"mode": "set_streak"}
+    await callback.message.answer(
+        "Введите новую длину серии (число дней):"
+    )
+    await callback.answer()
 
 @dp.callback_query(F.data == "send_message")
 async def prepare_send_message(callback: CallbackQuery):
     """Подготовка к отправке сообщения"""
-    if callback.from_user.id == MATTHEW_ID:
-        await callback.message.answer(
-            "Введите сообщение, которое я отправлю в группу:"
-        )
-        await callback.answer()
+    if callback.from_user.id != MATTHEW_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    user_state[callback.from_user.id] = {"mode": "send_message"}
+    await callback.message.answer(
+        "Введите сообщение, которое я отправлю в группу:"
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data == "refresh_status")
+async def refresh_status(callback: CallbackQuery):
+    """Обновление статуса"""
+    if callback.from_user.id != MATTHEW_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    await callback.message.edit_text(
+        fire_state.get_status_message(),
+        parse_mode="HTML"
+    )
+    await callback.answer("Статус обновлен")
+
+@dp.callback_query(F.data == "back_to_admin")
+async def back_to_admin(callback: CallbackQuery):
+    """Возврат в админ-панель"""
+    if callback.from_user.id != MATTHEW_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    user_state[callback.from_user.id] = {"mode": "admin"}
+    await callback.message.edit_text(
+        "🔧 <b>Админ-панель</b>\n\nВыберите действие:",
+        reply_markup=get_admin_keyboard(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data == "back_to_task_selection")
+async def back_to_task_selection(callback: CallbackQuery):
+    """Возврат к выбору заданий"""
+    if callback.from_user.id != MATTHEW_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    target = user_state[callback.from_user.id]["target"]
+    await callback.message.edit_text(
+        f"Выберите задания на {'сегодня' if target == 'today' else 'завтра'}:",
+        reply_markup=get_task_selection_keyboard(target))
+    )
+    await callback.answer()
 
 @dp.message(F.chat.type == "private", F.from_user.id == MATTHEW_ID)
 async def handle_admin_commands(message: Message):
     """Обработка команд админа"""
-    if message.reply_to_message and message.reply_to_message.text == "Введите новую длину серии (число дней):":
+    user_id = message.from_user.id
+    
+    if user_id not in user_state:
+        return
+    
+    if user_state[user_id].get("mode") == "set_streak":
         try:
             new_streak = int(message.text)
             fire_state.streak = new_streak
             fire_state.series_start_date = datetime.now(MOSCOW_TZ) - timedelta(days=new_streak)
             fire_state.status = "alive"
             fire_state.consecutive_misses = 0
-            await message.answer(f"✅ Серия установлена: {new_streak} дней")
+            
+            await message.answer(
+                f"✅ Серия установлена: {new_streak} дней\n\n"
+                f"{fire_state.get_status_message()}",
+                parse_mode="HTML"
+            )
+            user_state[user_id] = {"mode": "admin"}
         except ValueError:
             await message.answer("❌ Пожалуйста, введите число")
     
-    elif message.reply_to_message and message.reply_to_message.text == "Введите сообщение, которое я отправлю в группу:":
+    elif user_state[user_id].get("mode") == "send_message":
         await bot.send_message(
             chat_id=GROUP_ID,
             text=message.text
         )
         await message.answer("✅ Сообщение отправлено в группу")
+        user_state[user_id] = {"mode": "admin"}
 
 # Основные обработчики
 @dp.message(Command("start"))
@@ -345,6 +552,8 @@ async def cmd_start(message: Message):
             "Привет! Я - Огонёк! "
             "Напишите !огонек чтобы узнать текущий статус."
         )
+    elif message.from_user.id == MATTHEW_ID:
+        await admin_panel(message)
 
 @dp.message(F.text == "!огонек")
 async def fire_command(message: Message):
