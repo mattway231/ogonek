@@ -219,7 +219,7 @@ async def send_reminder():
             f"🚨 {cute_matthew} и {cute_yana}! Огонёк сейчас не горит... "
             f"Напоминаю, что нужно выполнить сегодняшние задания, чтобы он снова засиял! 💫",
             
-            f"✨ Забор покрасьте! Огонёк ждёт вашего внимания. "
+            f"✨ Здрасьте-забор покрасьте! Огонёк ждёт вашего внимания. "
             f"Не забыли про задания на сегодня?",
             
             f"{cute_matthew} и {cute_yana}, ваш огонёк скучает! "
@@ -419,9 +419,8 @@ async def select_today_tasks(callback: CallbackQuery):
     
     await callback.message.edit_text(
         "📝 Выберите 3 задания на сегодня:",
-        reply_markup=get_task_selection_keyboard("today"))
+        reply_markup=get_task_selection_keyboard("today")
     )
-    
     await callback.answer()
 
 @dp.callback_query(F.data == "select_tomorrow_tasks")
@@ -439,9 +438,8 @@ async def select_tomorrow_tasks(callback: CallbackQuery):
     
     await callback.message.edit_text(
         "📅 Выберите 3 задания на завтра:",
-        reply_markup=get_task_selection_keyboard("tomorrow"))
+        reply_markup=get_task_selection_keyboard("tomorrow")
     )
-    
     await callback.answer()
 
 @dp.callback_query(F.data == "set_streak")
@@ -455,7 +453,6 @@ async def set_streak(callback: CallbackQuery):
     await callback.message.answer(
         "Введите новую длину серии (число дней):"
     )
-    
     await callback.answer()
 
 @dp.callback_query(F.data == "send_message")
@@ -509,9 +506,8 @@ async def back_to_task_selection(callback: CallbackQuery):
     target = user_state[callback.from_user.id]["target"]
     await callback.message.edit_text(
         f"Выберите задания на {'сегодня' if target == 'today' else 'завтра'}:",
-        reply_markup=get_task_selection_keyboard(target))
+        reply_markup=get_task_selection_keyboard(target)
     )
-    
     await callback.answer()
 
 @dp.message(F.chat.type == "private", F.from_user.id == MATTHEW_ID)
