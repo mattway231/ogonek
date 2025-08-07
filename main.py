@@ -2,15 +2,14 @@ import os
 import random
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import Message, ChatMemberUpdated
+from aiogram.types import Message, ChatMemberUpdated, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.enums import ChatMemberStatus
 from aiogram.filters import ChatMemberUpdatedFilter, IS_MEMBER, IS_NOT_MEMBER
-from aiogram.utils.chat_action import ChatActionMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
@@ -76,7 +75,7 @@ class FireState:
                 self.message_counters[idx] = {"matthew": 0, "yana": 0}
     
     def update_status(self, yesterday_success: bool):
-        """Обновление статуса огонька на основе выполнения заданий"""
+        """Обновление статуса огонька"""
         if yesterday_success:
             self.consecutive_misses = 0
             self.status = "alive"
@@ -93,7 +92,7 @@ class FireState:
                 self.status = "frozen"
     
     def check_daily_completion(self) -> bool:
-        """Проверка выполнения всех заданий за текущий день"""
+        """Проверка выполнения всех заданий"""
         for task_idx in self.task_indices:
             task = TASKS[task_idx]
             
@@ -113,7 +112,7 @@ class FireState:
         }[self.status]
     
     def format_tasks(self) -> str:
-        """Форматирование списка заданий для вывода"""
+        """Форматирование списка заданий"""
         result = []
         for i, task_idx in enumerate(self.task_indices):
             task = TASKS[task_idx]
@@ -156,8 +155,6 @@ class FireState:
 
 # Глобальное состояние
 fire_state = FireState()
-
-# Инициализация бота
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler(timezone=MOSCOW_TZ)
@@ -174,10 +171,39 @@ def is_group_chat(message: types.Message) -> bool:
     return message.chat.id == GROUP_ID
 
 def get_cute_name(user_type: str) -> str:
-    return "Матвейка" if user_type == "matthew" else "Янчик"
+    return "Матвейчик" if user_type == "matthew" else "Янчик"
+
+async def send_task_completion_notice(task_idx: int):
+    """Уведомление о выполнении задания"""
+    task = TASKS[task_idx]
+    statuses = []
+    
+    for user in ["matthew", "yana"]:
+        if task["type"] == "message_count":
+            count = fire_state.message_counters[task_idx][user]
+            required = task["count"]
+            status = f"{count}/{required}"
+            if count >= required:
+                status = f"✅ {status}"
+        else:
+            status = "✅" if fire_state.completed_tasks[task_idx][user] else "❌"
+        
+        statuses.append(status)
+    
+    message = (
+        f"🎯 Задание выполнено!\n"
+        f"<b>{task['desc']}</b>\n"
+        f"Матвей: {statuses[0]}, Яна: {statuses[1]}"
+    )
+    
+    await bot.send_message(
+        chat_id=GROUP_ID,
+        text=message,
+        parse_mode="HTML"
+    )
 
 async def send_reminder():
-    """Отправка напоминания о заданиях"""
+    """Отправка напоминания"""
     if fire_state.status == "frozen" and not fire_state.check_daily_completion():
         cute_matthew = get_cute_name("matthew")
         cute_yana = get_cute_name("yana")
@@ -186,14 +212,14 @@ async def send_reminder():
             f"🚨 {cute_matthew} и {cute_yana}! Огонёк сейчас не горит... "
             f"Напоминаю, что нужно выполнить сегодняшние задания, чтобы он снова засиял! 💫",
             
-            f"✨ Привет! Огонёк ждёт вашего внимания. "
+            f"✨ Приветки! Огонёк ждёт вашего внимания. "
             f"Не забыли про задания на сегодня?",
             
             f"{cute_matthew} и {cute_yana}, ваш огонёк скучает! "
             f"Подарите ему немного тепла, выполнив задания 🔥",
             
             f"⏰ Тик-так, время идёт! Огонёк напоминает: "
-            f"сегодняшние задания ждут вашего выполнения!",
+            f"сегодняшние задания ждут вашего выполнения, тигры",
         ]
         
         await bot.send_message(
@@ -202,20 +228,14 @@ async def send_reminder():
         )
 
 async def new_day_tasks():
-    """Обновление заданий в 00:00 по МСК"""
+    """Обновление заданий в 00:00"""
     global fire_state
     
-    # Проверка выполнения вчерашних заданий
     yesterday_success = fire_state.check_daily_completion()
-    
-    # Обновление состояния
     fire_state.update_status(yesterday_success)
-    
-    # Инициализация нового дня
     fire_state.current_date = datetime.now(MOSCOW_TZ).date()
     fire_state.initialize_new_day()
     
-    # Отправка новых заданий
     status_emoji = fire_state.get_status_emoji()
     message = (
         f"{status_emoji} <b>Новый день! Новые задания!</b> {status_emoji}\n\n"
@@ -237,9 +257,88 @@ async def new_day_tasks():
         parse_mode="HTML"
     )
 
-# Обработчики команд и сообщений
+# Админ-панель
+def get_admin_keyboard():
+    """Клавиатура админ-панели"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔄 Перевыбрать задания сегодня", callback_data="retry_tasks")
+    builder.button(text="📅 Выбрать задания на завтра", callback_data="set_tomorrow_tasks")
+    builder.button(text="🔥 Установить серию", callback_data="set_streak")
+    builder.button(text="📨 Отправить сообщение", callback_data="send_message")
+    builder.adjust(1)
+    return builder.as_markup()
+
+@dp.message(Command("admin"))
+async def admin_panel(message: Message):
+    """Обработка команды /admin"""
+    if message.from_user.id == MATTHEW_ID and message.chat.type == "private":
+        await message.answer(
+            "🔧 <b>Админ-панель</b>\n\n"
+            "Выберите действие:",
+            reply_markup=get_admin_keyboard(),
+            parse_mode="HTML"
+        )
+
+@dp.callback_query(F.data == "retry_tasks")
+async def retry_tasks(callback: CallbackQuery):
+    """Перевыбор заданий на сегодня"""
+    if callback.from_user.id == MATTHEW_ID:
+        fire_state.initialize_new_day()
+        await callback.message.edit_text(
+            "🔄 Задания на сегодня перевыбраны!\n\n" + fire_state.get_status_message(),
+            parse_mode="HTML"
+        )
+        await callback.answer()
+
+@dp.callback_query(F.data == "set_tomorrow_tasks")
+async def set_tomorrow_tasks(callback: CallbackQuery):
+    """Выбор заданий на завтра"""
+    if callback.from_user.id == MATTHEW_ID:
+        # Здесь можно реализовать выбор конкретных заданий
+        await callback.answer("Функция в разработке", show_alert=True)
+
+@dp.callback_query(F.data == "set_streak")
+async def set_streak(callback: CallbackQuery):
+    """Установка серии"""
+    if callback.from_user.id == MATTHEW_ID:
+        await callback.message.answer(
+            "Введите новую длину серии (число дней):"
+        )
+        await callback.answer()
+
+@dp.callback_query(F.data == "send_message")
+async def prepare_send_message(callback: CallbackQuery):
+    """Подготовка к отправке сообщения"""
+    if callback.from_user.id == MATTHEW_ID:
+        await callback.message.answer(
+            "Введите сообщение, которое я отправлю в группу:"
+        )
+        await callback.answer()
+
+@dp.message(F.chat.type == "private", F.from_user.id == MATTHEW_ID)
+async def handle_admin_commands(message: Message):
+    """Обработка команд админа"""
+    if message.reply_to_message and message.reply_to_message.text == "Введите новую длину серии (число дней):":
+        try:
+            new_streak = int(message.text)
+            fire_state.streak = new_streak
+            fire_state.series_start_date = datetime.now(MOSCOW_TZ) - timedelta(days=new_streak)
+            fire_state.status = "alive"
+            fire_state.consecutive_misses = 0
+            await message.answer(f"✅ Серия установлена: {new_streak} дней")
+        except ValueError:
+            await message.answer("❌ Пожалуйста, введите число")
+    
+    elif message.reply_to_message and message.reply_to_message.text == "Введите сообщение, которое я отправлю в группу:":
+        await bot.send_message(
+            chat_id=GROUP_ID,
+            text=message.text
+        )
+        await message.answer("✅ Сообщение отправлено в группу")
+
+# Основные обработчики
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message):
+async def cmd_start(message: Message):
     """Обработка команды /start"""
     if is_group_chat(message):
         await message.reply(
@@ -248,7 +347,7 @@ async def cmd_start(message: types.Message):
         )
 
 @dp.message(F.text == "!огонек")
-async def fire_command(message: types.Message):
+async def fire_command(message: Message):
     """Обработка команды !огонек"""
     if is_group_chat(message):
         await message.reply(
@@ -257,15 +356,16 @@ async def fire_command(message: types.Message):
         )
 
 @dp.message(F.chat.id == GROUP_ID)
-async def handle_message(message: types.Message):
+async def handle_message(message: Message):
     """Обработка всех сообщений в чате"""
     user_type = get_user_type(message.from_user.id)
     if not user_type:
         return
     
-    # Обработка всех типов заданий
+    # Проверяем все задания
     for task_idx in fire_state.task_indices:
         task = TASKS[task_idx]
+        was_completed = fire_state.completed_tasks[task_idx][user_type]
         
         # Подсчет сообщений
         if task["type"] == "message_count":
@@ -317,6 +417,10 @@ async def handle_message(message: types.Message):
             phrases = ["спокойной ночи", "спок", "спокойной ночки", "сладких снов"]
             if any(phrase in text for phrase in phrases):
                 fire_state.completed_tasks[task_idx][user_type] = True
+        
+        # Уведомление о выполнении задания
+        if not was_completed and fire_state.completed_tasks[task_idx][user_type]:
+            await send_task_completion_notice(task_idx)
 
 @dp.chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
 async def on_user_join(event: ChatMemberUpdated):
@@ -327,9 +431,6 @@ async def on_user_join(event: ChatMemberUpdated):
             text=(
                 f"Привет, Яна! Я - Огонёк, общайся с Матвеем каждый день, "
                 f"чтобы я продолжал гореть.\n\n{fire_state.get_status_message()}"
-                f"(пишу тебе через код, бот автоматически отправит это тебе когда"
-                f"ты зайдешь в группу, эта группа это замена нашего лс, но только с"
-                f"добавлениеи этого бота ахах)"
             ),
             parse_mode="HTML"
         )
