@@ -3,11 +3,12 @@ import random
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union
+from aiohttp import web
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import Message, ChatMemberUpdated, CallbackQuery, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+from aiogram.types import Message, ChatMemberUpdated, CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.enums import ChatMemberStatus
 from aiogram.filters import ChatMemberUpdatedFilter, IS_MEMBER, IS_NOT_MEMBER
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -27,6 +28,21 @@ MATTHEW_ID = int(os.environ['MATTHEW_ID'])
 YANA_ID = int(os.environ['YANA_ID'])
 GROUP_ID = int(os.environ['GROUP_ID'])
 BOT_TOKEN = os.environ['BOT_TOKEN']
+
+# Keep-alive сервер
+async def handle(request):
+    return web.Response(text="Bot is alive")
+
+async def keep_alive():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    print("Keep-alive server started")
+
+# ... (остальной код FireState и обработчики остаются без изменений) ...
 
 # Определение заданий
 TASKS = [
@@ -644,15 +660,17 @@ async def on_user_join(event: ChatMemberUpdated):
             parse_mode="HTML"
         )
 
+
 async def main():
-    """Основная функция запуска"""
+    # Запускаем keep-alive сервер
+    asyncio.create_task(keep_alive())
+    
     # Настройка планировщика
     scheduler.add_job(
         new_day_tasks,
         CronTrigger(hour=0, minute=0, timezone=MOSCOW_TZ)
     )
     
-    # Напоминания 4 раза в день
     for hour in [10, 14, 18, 22]:
         scheduler.add_job(
             send_reminder,
