@@ -199,7 +199,8 @@ async def send_reminder():
         await bot.send_message(
             chat_id=GROUP_ID,
             text=random.choice(reminder_messages)
-        
+        )
+
 async def new_day_tasks():
     """Обновление заданий в 00:00 по МСК"""
     global fire_state
